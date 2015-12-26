@@ -15,9 +15,37 @@
  */
 package io.netty.handler.ssl;
 
+import org.junit.Test;
+
+import io.netty.handler.ssl.ApplicationProtocolConfig.SelectedListenerFailureBehavior;
+import io.netty.handler.ssl.ApplicationProtocolConfig.SelectorFailureBehavior;
+import io.netty.handler.ssl.ApplicationProtocolConfig.Protocol;
 import static org.junit.Assume.assumeTrue;
 
 public class OpenSslEngineTest extends SSLEngineTest {
+
+    private static final String PREFERRED_APPLICATION_LEVEL_PROTOCOL = "my-protocol-http2";
+    private static final String FALLBACK_APPLICATION_LEVEL_PROTOCOL = "my-protocol-http1_1";
+    private static final String APPLICATION_LEVEL_PROTOCOL_NOT_COMPATIBLE = "my-protocol-FOO";
+
+    @Test
+    public void testNpn() throws Exception {
+        assumeTrue(OpenSsl.isAvailable());
+        ApplicationProtocolConfig apn = acceptingNegotiator(Protocol.NPN,
+                PREFERRED_APPLICATION_LEVEL_PROTOCOL);
+        setupHandlers(apn);
+        runTest(PREFERRED_APPLICATION_LEVEL_PROTOCOL);
+    }
+
+    @Test
+    public void testAlpn() throws Exception {
+        assumeTrue(OpenSsl.isAvailable());
+        ApplicationProtocolConfig apn = acceptingNegotiator(Protocol.ALPN,
+                PREFERRED_APPLICATION_LEVEL_PROTOCOL);
+        setupHandlers(apn);
+        runTest(PREFERRED_APPLICATION_LEVEL_PROTOCOL);
+    }
+
     @Override
     public void testMutualAuthSameCerts() throws Exception {
         assumeTrue(OpenSsl.isAvailable());
@@ -57,5 +85,13 @@ public class OpenSslEngineTest extends SSLEngineTest {
     @Override
     protected SslProvider sslProvider() {
         return SslProvider.OPENSSL;
+    }
+
+    protected ApplicationProtocolConfig acceptingNegotiator(ApplicationProtocolConfig.Protocol protocol,
+            String... supportedProtocols) {
+        return new ApplicationProtocolConfig(protocol,
+                SelectorFailureBehavior.NO_ADVERTISE,
+                SelectedListenerFailureBehavior.ACCEPT,
+                supportedProtocols);
     }
 }

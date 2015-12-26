@@ -49,6 +49,7 @@ import javax.net.ssl.SSLSession;
 import java.io.File;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
+import java.security.cert.CertificateException;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -380,4 +381,94 @@ public abstract class SSLEngineTest {
     }
 
     protected abstract SslProvider sslProvider();
+
+    protected void setupHandlers(ApplicationProtocolConfig apn) throws InterruptedException, SSLException,
+                                                                       CertificateException {
+        setupHandlers(apn, apn);
+    }
+
+    protected void setupHandlers(ApplicationProtocolConfig serverApn, ApplicationProtocolConfig clientApn)
+            throws InterruptedException, SSLException, CertificateException {
+        SelfSignedCertificate ssc = new SelfSignedCertificate();
+
+        setupHandlers(SslContextBuilder.forServer(ssc.certificate(), ssc.privateKey(), null)
+                        .sslProvider(sslProvider())
+                        .ciphers(null, IdentityCipherSuiteFilter.INSTANCE)
+                        .applicationProtocolConfig(serverApn)
+                        .sessionCacheSize(0)
+                        .sessionTimeout(0)
+                        .build(),
+
+                SslContextBuilder.forClient()
+                        .sslProvider(sslProvider())
+                        .applicationProtocolConfig(clientApn)
+                        .trustManager(InsecureTrustManagerFactory.INSTANCE)
+                        .ciphers(null, IdentityCipherSuiteFilter.INSTANCE)
+                        .sessionCacheSize(0)
+                        .sessionTimeout(0)
+                        .build());
+    }
+
+    protected void setupHandlers(SslContext serverCtx, SslContext clientCtx)
+            throws InterruptedException, SSLException, CertificateException {
+
+        serverSslCtx = serverCtx;
+        clientSslCtx = clientCtx;
+
+        serverConnectedChannel = null;
+        sb = new ServerBootstrap();
+        cb = new Bootstrap();
+
+        sb.group(new NioEventLoopGroup(), new NioEventLoopGroup());
+        sb.channel(NioServerSocketChannel.class);
+        sb.childHandler(new ChannelInitializer<Channel>() {
+            @Override
+            protected void initChannel(Channel ch) throws Exception {
+                ChannelPipeline p = ch.pipeline();
+                p.addLast(serverSslCtx.newHandler(ch.alloc()));
+                p.addLast(new MessageDelegatorChannelHandler(serverReceiver, serverLatch));
+                p.addLast(new ChannelHandlerAdapter() {
+                    @Override
+                    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+                        if (cause.getCause() instanceof SSLHandshakeException) {
+                            serverException = cause.getCause();
+                            serverLatch.countDown();
+                        } else {
+                            ctx.fireExceptionCaught(cause);
+                        }
+                    }
+                });
+                serverConnectedChannel = ch;
+            }
+        });
+
+        cb.group(new NioEventLoopGroup());
+        cb.channel(NioSocketChannel.class);
+        cb.handler(new ChannelInitializer<Channel>() {
+            @Override
+            protected void initChannel(Channel ch) throws Exception {
+                ChannelPipeline p = ch.pipeline();
+                p.addLast(clientSslCtx.newHandler(ch.alloc()));
+                p.addLast(new MessageDelegatorChannelHandler(clientReceiver, clientLatch));
+                p.addLast(new ChannelHandlerAdapter() {
+                    @Override
+                    public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+                        if (cause.getCause() instanceof SSLHandshakeException) {
+                            clientException = cause.getCause();
+                            clientLatch.countDown();
+                        } else {
+                            ctx.fireExceptionCaught(cause);
+                        }
+                    }
+                });
+            }
+        });
+
+        serverChannel = sb.bind(new InetSocketAddress(0)).sync().channel();
+        int port = ((InetSocketAddress) serverChannel.localAddress()).getPort();
+
+        ChannelFuture ccf = cb.connect(new InetSocketAddress(NetUtil.LOCALHOST, port));
+        assertTrue(ccf.awaitUninterruptibly().isSuccess());
+        clientChannel = ccf.channel();
+    }
 }
